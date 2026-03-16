@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import chalk from "chalk";
 import { logCommand } from "./commands/log.js";
@@ -10,12 +11,14 @@ import { authCommand } from "./commands/auth.js";
 import { AuthenticationError, ApiError } from "./lib/api-client.js";
 import { formatError } from "./lib/formatters.js";
 
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+
 const program = new Command();
 
 program
   .name("hype")
   .description("Hype Doc CLI — log and track your wins from the terminal")
-  .version("0.1.0")
+  .version(pkg.version)
   .configureOutput({
     outputError: (str) => process.stderr.write(formatError(str) + "\n"),
   });

@@ -1,6 +1,6 @@
 {
   "name": "@hypedoc/cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CLI for Hype Doc — log and track your wins from the terminal",
   "type": "module",
   "bin": {
