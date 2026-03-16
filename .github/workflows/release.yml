@@ -1,0 +1,170 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+          - os: macos-13
+            platform: darwin
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - run: pnpm install
+
+      - name: Build binary
+        run: node scripts/build-binary.ts
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hype-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/hype-${{ matrix.platform }}-${{ matrix.arch }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/hype-*
+          generate_release_notes: true
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          cache: pnpm
+
+      - run: pnpm install
+      - run: pnpm run build
+      - run: pnpm publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  update-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Compute SHA256 hashes
+        id: sha
+        run: |
+          echo "darwin_arm64=$(shasum -a 256 artifacts/hype-darwin-arm64 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "darwin_x64=$(shasum -a 256 artifacts/hype-darwin-x64 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "linux_arm64=$(shasum -a 256 artifacts/hype-linux-arm64 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "linux_x64=$(shasum -a 256 artifacts/hype-linux-x64 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: myhypedoc/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION="${VERSION#v}"
+          cat > homebrew-tap/Formula/hype.rb << 'FORMULA'
+          class Hype < Formula
+            desc "CLI for Hype Doc: log and track your wins from the terminal"
+            homepage "https://github.com/myhypedoc/cli"
+            version "VERSION_PLACEHOLDER"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/myhypedoc/cli/releases/download/v#{version}/hype-darwin-arm64"
+                sha256 "SHA_DARWIN_ARM64"
+              else
+                url "https://github.com/myhypedoc/cli/releases/download/v#{version}/hype-darwin-x64"
+                sha256 "SHA_DARWIN_X64"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/myhypedoc/cli/releases/download/v#{version}/hype-linux-arm64"
+                sha256 "SHA_LINUX_ARM64"
+              else
+                url "https://github.com/myhypedoc/cli/releases/download/v#{version}/hype-linux-x64"
+                sha256 "SHA_LINUX_X64"
+              end
+            end
+
+            def install
+              binary_name = stable.url.split("/").last
+              bin.install binary_name => "hype"
+            end
+
+            test do
+              assert_match "Hype Doc CLI", shell_output("#{bin}/hype --help")
+            end
+          end
+          FORMULA
+
+          # Replace placeholders
+          sed -i "s/VERSION_PLACEHOLDER/$VERSION/" homebrew-tap/Formula/hype.rb
+          sed -i "s/SHA_DARWIN_ARM64/${{ steps.sha.outputs.darwin_arm64 }}/" homebrew-tap/Formula/hype.rb
+          sed -i "s/SHA_DARWIN_X64/${{ steps.sha.outputs.darwin_x64 }}/" homebrew-tap/Formula/hype.rb
+          sed -i "s/SHA_LINUX_ARM64/${{ steps.sha.outputs.linux_arm64 }}/" homebrew-tap/Formula/hype.rb
+          sed -i "s/SHA_LINUX_X64/${{ steps.sha.outputs.linux_x64 }}/" homebrew-tap/Formula/hype.rb
+
+          # Fix indentation (heredoc adds extra spaces)
+          sed -i 's/^          //' homebrew-tap/Formula/hype.rb
+
+      - name: Commit and push
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/hype.rb
+          git commit -m "Update hype to ${GITHUB_REF_NAME}"
+          git push

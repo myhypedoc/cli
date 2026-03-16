@@ -1,0 +1,31 @@
+[tools]
+node = "24"
+
+[tasks.setup]
+description = "Install dependencies"
+run = "pnpm install"
+
+[tasks.dev]
+description = "Watch and rebuild TypeScript"
+run = "pnpm run dev"
+
+[tasks.build]
+description = "Compile TypeScript"
+run = "pnpm run build"
+
+[tasks.test]
+description = "Run test suite"
+run = "pnpm run test"
+
+[tasks.lint]
+description = "Run oxlint"
+run = "pnpm run lint"
+
+[tasks.fmt]
+description = "Format with oxfmt"
+run = "pnpm run fmt"
+
+[tasks.binary]
+description = "Build standalone binary (Node.js SEA)"
+depends = ["build"]
+run = "node scripts/build-binary.ts"
